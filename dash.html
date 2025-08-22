@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Kommo Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root {
+  font-family: Arial, sans-serif;
+}
+body {
+  margin: 0;
+  padding: 0;
+  font-family: Arial, sans-serif;
+  background-color: #f5f5f5;
+  color: #222;
+}
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: #1e1e1e;
+    color: #ddd;
+  }
+}
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  background: #eee;
+}
+@media (prefers-color-scheme: dark) {
+  .header {
+    background: #2a2a2a;
+  }
+}
+.header select, .header input, .header button {
+  padding: 4px 8px;
+}
+.kpi-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem;
+}
+.kpi {
+  flex: 1 1 150px;
+  padding: 1rem;
+  background: #fff;
+  border-radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  .kpi {
+    background: #2a2a2a;
+  }
+}
+.chart-container {
+  padding: 1rem;
+}
+canvas {
+  width: 100% !important;
+  height: 300px !important;
+}
+.spinner {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border: 4px solid #ccc;
+  border-top: 4px solid #333;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 0.8s linear infinite;
+}
+@media (prefers-color-scheme: dark) {
+  .spinner {
+    border: 4px solid #444;
+    border-top: 4px solid #ccc;
+  }
+}
+@keyframes spin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="header">
+  <label>Período:
+    <select id="range">
+      <option value="today">Hoje</option>
+      <option value="yesterday">Ontem</option>
+      <option value="7d">Últimos 7 dias</option>
+      <option value="30d">Últimos 30 dias</option>
+    </select>
+  </label>
+  <label>Pipeline:
+    <select id="pipeline"></select>
+  </label>
+  <label>Usuário:
+    <select id="user"></select>
+  </label>
+  <button id="refresh">Atualizar agora</button>
+  <span id="updatedAt"></span>
+</div>
+<div id="spinner" class="spinner hidden"></div>
+<div class="kpi-container">
+  <div class="kpi" id="kpi-created">Leads criados: <strong>0</strong></div>
+  <div class="kpi" id="kpi-active">Leads ativos: <strong>0</strong></div>
+  <div class="kpi" id="kpi-conversion">Conversão: <strong>0%</strong></div>
+  <div class="kpi" id="kpi-ticket">Ticket médio: <strong>0</strong></div>
+  <div class="kpi" id="kpi-revenue">Receita: <strong>0</strong></div>
+  <div class="kpi" id="kpi-tasks">Tarefas: <strong>0</strong></div>
+</div>
+<div class="chart-container">
+  <canvas id="chartFunnel"></canvas>
+</div>
+<div class="chart-container">
+  <canvas id="chartLeads"></canvas>
+</div>
+<div class="chart-container">
+  <canvas id="chartRevenue"></canvas>
+</div>
+<div class="chart-container">
+  <canvas id="chartSources"></canvas>
+</div>
+<div class="chart-container">
+  <canvas id="chartTasks"></canvas>
+</div>
+<script>
+const apiBase = '/api';
+async function fetchJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('API error');
+  return await res.json();
+}
+async function loadFilters() {
+  const [pipelines, users] = await Promise.all([
+    fetchJson(apiBase + '/pipelines'),
+    fetchJson(apiBase + '/users')
+  ]);
+  const pipelineSelect = document.getElementById('pipeline');
+  pipelineSelect.innerHTML = '<option value="">Todos</option>';
+  pipelines.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id || p.uuid || p._id || p.pipeline_id;
+    opt.textContent = p.name;
+    pipelineSelect.appendChild(opt);
+  });
+  const userSelect = document.getElementById('user');
+  userSelect.innerHTML = '<option value="">Todos</option>';
+  users.forEach(u => {
+    const opt = document.createElement('option');
+    opt.value = u.id || u.uuid;
+    opt.textContent = u.name || u.full_name || u.login;
+    userSelect.appendChild(opt);
+  });
+}
+let funnelChart, leadsChart, revenueChart, sourceChart, tasksChart;
+function showSpinner(show) {
+  document.getElementById('spinner').classList.toggle('hidden', !show);
+}
+function formatCurrency(value) {
+  return new Intl.NumberFormat('pt-BR', { style:'currency', currency:'BRL' }).format(value);
+}
+async function loadData() {
+  try {
+    showSpinner(true);
+    const range = document.getElementById('range').value;
+    const pipeline = document.getElementById('pipeline').value;
+    const user = document.getElementById('user').value;
+    const query = `?range=${range}${pipeline ? '&pipeline_id=' + pipeline : ''}${user ? '&user_id=' + user : ''}`;
+    const metrics = await fetchJson(apiBase + '/metrics' + query);
+    document.getElementById('kpi-created').innerHTML = 'Leads criados: <strong>' + metrics.leads_created + '</strong>';
+    document.getElementById('kpi-active').innerHTML = 'Leads ativos: <strong>' + metrics.active_leads + '</strong>';
+    document.getElementById('kpi-conversion').innerHTML = 'Conversão: <strong>' + (metrics.conversion_rate || 0).toFixed(2) + '%</strong>';
+    document.getElementById('kpi-ticket').innerHTML = 'Ticket médio: <strong>' + formatCurrency(metrics.avg_ticket || 0) + '</strong>';
+    document.getElementById('kpi-revenue').innerHTML = 'Receita: <strong>' + formatCurrency(metrics.revenue_won || 0) + '</strong>';
+    const tasks = await fetchJson(apiBase + '/tasks' + (user ? '?user_id=' + user : ''));
+    const tasksStr = 'Vencidas: ' + tasks.overdue + ' Hoje: ' + tasks.today + ' Próx 48h: ' + tasks.next48h;
+    document.getElementById('kpi-tasks').innerHTML = 'Tarefas: <strong>' + tasksStr + '</strong>';
+    const funnel = await fetchJson(apiBase + '/funnels' + (pipeline ? '?pipeline_id=' + pipeline + '&range=' + range : '?range=' + range));
+    const labelsFunnel = funnel.map(item => item.stage_name);
+    const dataFunnel = funnel.map(item => item.count);
+    updateChart(funnelChart, labelsFunnel, dataFunnel, 'Leads por estágio', 'Estágio', 'Qtd');
+    const leadsTs = await fetchJson(apiBase + '/timeseries?metric=leads_created&range=' + range + (pipeline ? '&pipeline_id=' + pipeline : '') + (user ? '&user_id=' + user : ''));
+    const wonTs = await fetchJson(apiBase + '/timeseries?metric=leads_won&range=' + range + (pipeline ? '&pipeline_id=' + pipeline : '') + (user ? '&user_id=' + user : ''));
+    const labelsTs = leadsTs.map(item => item.date);
+    const createdData = leadsTs.map(item => item.value);
+    const wonData = wonTs.map(item => item.value);
+    updateMultiLineChart(leadsChart, labelsTs, [
+      { label:'Criados', data: createdData, borderColor:'#007bff' },
+      { label:'Ganhos', data: wonData, borderColor:'#28a745' }
+    ], 'Leads por dia', 'Dia', 'Quantidade');
+    const revenueTs = await fetchJson(apiBase + '/timeseries?metric=revenue_won&range=' + range + (pipeline ? '&pipeline_id=' + pipeline : '') + (user ? '&user_id=' + user : ''));
+    const revenueData = revenueTs.map(item => item.value);
+    updateChart(revenueChart, labelsTs, revenueData, 'Receita ganha por dia', 'Dia', 'Valor (BRL)');
+    // Fontes - não implementado
+    updateChart(sourceChart, [], [], 'Fontes de lead (Top 5)', 'Fonte', 'Qtd');
+    updateChart(tasksChart, ['Vencidas','Hoje','Próx 48h'], [tasks.overdue, tasks.today, tasks.next48h], 'Tarefas por status', 'Status', 'Qtd');
+    document.getElementById('updatedAt').textContent = 'Atualizado: ' + new Date().toLocaleString('pt-BR');
+  } catch (err) {
+    console.error(err);
+  } finally {
+    showSpinner(false);
+  }
+}
+function updateChart(chart, labels, data, title, xLabel, yLabel) {
+  if (!chart) {
+    // Chart not defined - this should not happen since we init charts in init()
+    return;
+  }
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = data;
+  chart.options.plugins.title.text = title;
+  chart.options.scales.x.title.text = xLabel;
+  chart.options.scales.y.title.text = yLabel;
+  chart.update();
+}
+function updateMultiLineChart(chart, labels, datasets, title, xLabel, yLabel) {
+  if (!chart) return;
+  chart.data.labels = labels;
+  chart.data.datasets = datasets.map(d => ({ label:d.label, data:d.data, borderColor:d.borderColor, fill:false }));
+  chart.options.plugins.title.text = title;
+  chart.options.scales.x.title.text = xLabel;
+  chart.options.scales.y.title.text = yLabel;
+  chart.update();
+}
+document.getElementById('refresh').addEventListener('click', () => {
+  loadData();
+});
+async function init() {
+  await loadFilters();
+  // Initialize empty charts
+  const ctxFunnel = document.getElementById('chartFunnel').getContext('2d');
+  funnelChart = new Chart(ctxFunnel, {
+    type:'bar',
+    data:{ labels:[], datasets:[{ label:'Funil', data:[], backgroundColor:'#17a2b8' }] },
+    options:{ plugins:{ title:{ display:true, text:'Funil por estágio' }}, scales:{ x:{ title:{ display:true, text:'Estágio' } }, y:{ title:{ display:true, text:'Quantidade' }, beginAtZero:true } } }
+  });
+  const ctxLeads = document.getElementById('chartLeads').getContext('2d');
+  leadsChart = new Chart(ctxLeads, {
+    type:'line',
+    data:{ labels:[], datasets:[] },
+    options:{ plugins:{ title:{ display:true, text:'Leads criados/ganhos por dia' }}, scales:{ x:{ title:{ display:true, text:'Dia' } }, y:{ title:{ display:true, text:'Quantidade' }, beginAtZero:true } } }
+  });
+  const ctxRevenue = document.getElementById('chartRevenue').getContext('2d');
+  revenueChart = new Chart(ctxRevenue, {
+    type:'bar',
+    data:{ labels:[], datasets:[{ label:'Receita', data:[], backgroundColor:'#ffc107' }] },
+    options:{ plugins:{ title:{ display:true, text:'Receita ganha por dia' }}, scales:{ x:{ title:{ display:true, text:'Dia' } }, y:{ title:{ display:true, text:'Valor (BRL)' }, beginAtZero:true } } }
+  });
+  const ctxSources = document.getElementById('chartSources').getContext('2d');
+  sourceChart = new Chart(ctxSources, {
+    type:'bar',
+    data:{ labels:[], datasets:[{ label:'Fontes', data:[], backgroundColor:'#6f42c1' }] },
+    options:{ plugins:{ title:{ display:true, text:'Fontes de lead (Top 5)' }}, scales:{ x:{ title:{ display:true, text:'Fonte' } }, y:{ title:{ display:true, text:'Quantidade' }, beginAtZero:true } } }
+  });
+  const ctxTasks = document.getElementById('chartTasks').getContext('2d');
+  tasksChart = new Chart(ctxTasks, {
+    type:'bar',
+    data:{ labels:['Vencidas','Hoje','Próx 48h'], datasets:[{ label:'Tarefas', data:[0,0,0], backgroundColor:'#dc3545' }] },
+    options:{ plugins:{ title:{ display:true, text:'Tarefas por status' }}, scales:{ x:{ title:{ display:true, text:'Status' } }, y:{ title:{ display:true, text:'Quantidade' }, beginAtZero:true } } }
+  });
+  loadData();
+  setInterval(loadData, 60000);
+}
+init().catch(err => console.error(err));
+</script>
+</body>
+</html>
