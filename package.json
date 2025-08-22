@@ -1,0 +1,14 @@
+{
+  "name": "kommo-dashboard",
+  "version": "1.0.0",
+  "description": "Dynamic dashboard for Kommo CRM with KPIs and charts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.1",
+    "lru-cache": "^10.0.0"
+  }
+}
